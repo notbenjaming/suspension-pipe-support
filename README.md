@@ -1,2 +1,38 @@
-# suspension-pipe-support
-Interactive browser-based visualization prototype for multi-level suspended pipe supports
+# 悬吊管道支架可视化
+
+独立的浏览器端参数化示意工具，用于展示多层悬吊式钢管支架的三维外观和正视、侧视、俯视示意。项目仅使用 Vite、JavaScript 和 Three.js，不连接 SAP2000 或其他分析软件。
+
+## 本地运行
+
+需要 Node.js 20.19+ 或 22.12+。
+
+```sh
+npm install
+npm run dev
+```
+
+## 构建与测试
+
+```sh
+npm test
+npm run build
+npm run preview
+```
+
+## 配置功能
+
+- 编辑支架宽度 B、横梁层数及各层标高。
+- 吊杆使用圆钢，可选择 Ø12、Ø16、Ø20、Ø24、Ø30 标准尺寸或自定义直径。
+- 横梁使用真实 L 形角钢截面，可选择 L40×4、L50×5、L63×6 或自定义边长与厚度。
+- 三维视图支持旋转和缩放。管线仅以示意线显示，不构造实体管道。
+- 配置可导出为 JSON，也可导入并即时验证。重置按钮恢复标注为示例的初始配置。
+
+输入范围：宽度 200–6000 mm；圆钢直径 8–60 mm；角钢边长 20–150 mm、厚度 2–16 mm；标高 200–10000 mm；横梁层间距至少 100 mm。
+
+## GitHub Pages 部署
+
+仓库已包含 `.github/workflows/deploy.yml`。工作流在 `main` 分支更新后执行测试、构建并部署 Pages，Vite 的静态资源基路径设置为 `/suspension-pipe-support/`。首次部署前，在仓库 **Settings → Pages → Build and deployment** 中选择 **GitHub Actions**。
+
+## 使用边界
+
+此项目是概念可视化，不是结构设计或验证工具。它不检查材料强度、稳定性、连接、挠度、荷载、规范符合性，也不应作为施工依据。初始参数仅为界面演示示例，不构成推荐或规定尺寸。实际工程应由具备资质的专业人员独立设计和复核。

@@ -2,6 +2,8 @@ export const LEGACY_KGF_TO_KN = 0.01;
 export const DEFAULT_STEEL_ALLOWABLE = { Q235: 215, Q345: 305 };
 export const ROD_DIAMETERS_MM = [10, 12, 14, 16, 18, 20, 22];
 
+const isPositiveFinite = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0;
+
 export function legacyKgPerMToKNPerM(kgPerM) {
   return kgPerM * LEGACY_KGF_TO_KN;
 }
@@ -26,6 +28,10 @@ export function validateMultiHangInput(input) {
   }
   if (!number(input.minWidthMm) || input.minWidthMm < 0 || input.minWidthMm > 30000) {
     errors.push('手工最小宽度应为 0–30000 mm。');
+  }
+  if (input.beamWidthOverrideMm !== undefined &&
+      (!number(input.beamWidthOverrideMm) || input.beamWidthOverrideMm < 200 || input.beamWidthOverrideMm > 6000)) {
+    errors.push('共享支架宽度应为 200–6000 mm。');
   }
   if (!Array.isArray(input.layers) || input.layers.length < 2 || input.layers.length > 5) {
     errors.push('多层吊架应设置 2–5 层。');
@@ -88,14 +94,84 @@ function calculateBeamInternalForces({ pipeLineLoadKNm, spacingM, spanM, extraLi
   };
 }
 
+function calculateBeamChecks(layers, spanM, section, input) {
+  if (!section) return { available: false, reason: '未选择横梁型钢。' };
+
+  const missing = [];
+  if (!isPositiveFinite(section.IxMm4)) missing.push('截面惯性矩 Ix');
+  if (!isPositiveFinite(section.WxMm3)) missing.push('截面抵抗矩 Wx');
+  if (!isPositiveFinite(section.selfWeightKNm)) missing.push('型钢自重');
+  if (!isPositiveFinite(input.beamElasticModulusNmm2)) missing.push('弹性模量 E');
+  if (!isPositiveFinite(input.beamAllowableBendingStressNmm2)) missing.push('受弯容许应力');
+  if (!isPositiveFinite(input.beamDeflectionLimitMm)) missing.push('挠度限值');
+
+  const selfWeightAvailable = isPositiveFinite(section.selfWeightKNm);
+  const strengthAvailable = isPositiveFinite(section.WxMm3) && selfWeightAvailable;
+  const deflectionAvailable = isPositiveFinite(section.IxMm4) && selfWeightAvailable &&
+    isPositiveFinite(input.beamElasticModulusNmm2);
+  const strengthLimitAvailable = isPositiveFinite(input.beamAllowableBendingStressNmm2);
+  const deflectionLimitAvailable = isPositiveFinite(input.beamDeflectionLimitMm);
+
+  return {
+    available: strengthAvailable && strengthLimitAvailable && deflectionAvailable && deflectionLimitAvailable,
+    reason: missing.length ? `校核数据缺失：${missing.join('、')}。` : null,
+    section: `${section.typeLabel ?? section.type ?? ''} ${section.model ?? ''}`.trim(),
+    sectionWeightKNm: isPositiveFinite(section.selfWeightKNm) ? section.selfWeightKNm : null,
+    layers: layers.map((layer) => {
+      const bendingStressNmm2 = strengthAvailable
+        ? layer.momentKNm * 1e6 / section.WxMm3
+        : null;
+      const strengthPass = strengthAvailable && strengthLimitAvailable
+        ? bendingStressNmm2 <= input.beamAllowableBendingStressNmm2
+        : null;
+
+      let deflectionMm = null;
+      if (deflectionAvailable) {
+        const spanMm = spanM * 1000;
+        const distributedLoadKNm = layer.distributedPipeLoadKNm +
+          layer.extraLineKNm + layer.selfWeightKNm;
+        const pointLoadKN = layer.pipePointLoadKN + layer.extraPointKN +
+          layer.selfWeightKNm * spanM;
+        const distributedDeflectionMm =
+          5 * distributedLoadKNm * spanMm ** 4 /
+          (384 * input.beamElasticModulusNmm2 * section.IxMm4);
+        const pointDeflectionMm =
+          pointLoadKN * 1000 * spanMm ** 3 /
+          (48 * input.beamElasticModulusNmm2 * section.IxMm4);
+        deflectionMm = Math.max(distributedDeflectionMm, pointDeflectionMm) * 1.3;
+      }
+      const deflectionPass = deflectionMm !== null && deflectionLimitAvailable
+        ? deflectionMm <= input.beamDeflectionLimitMm
+        : null;
+
+      return {
+        layer: layer.layer,
+        bendingStressNmm2,
+        allowableBendingStressNmm2: strengthLimitAvailable
+          ? input.beamAllowableBendingStressNmm2
+          : null,
+        strengthPass,
+        deflectionMm,
+        deflectionLimitMm: deflectionLimitAvailable ? input.beamDeflectionLimitMm : null,
+        deflectionPass,
+      };
+    }),
+  };
+}
+
 export function calculateMultiHang(input) {
   const validation = validateMultiHangInput(input);
   if (!validation.valid) throw new Error(validation.errors.join('\n'));
 
   const spacingM = input.spacingMm / 1000;
   const layerWidthsMm = input.layers.map(({ pipes }) => calculateLayerWidth(pipes));
-  const widthMm = Math.max(...layerWidthsMm, input.minWidthMm);
+  const widthMm = Math.max(...layerWidthsMm, input.minWidthMm, input.beamWidthOverrideMm ?? 0);
   const spanM = widthMm / 1000;
+  const beamSection = input.beamSection ?? null;
+  const sectionSelfWeightKNm = beamSection && isPositiveFinite(beamSection.selfWeightKNm)
+    ? beamSection.selfWeightKNm
+    : 0;
+  const totalBeamSelfWeightKNm = input.beamSelfWeightKNm + sectionSelfWeightKNm;
 
   const layers = input.layers.map(({ pipes }, index) => {
     const pipeLineLoadKNm = pipes.reduce((sum, pipe) => sum + pipe.lineLoadKNm, 0);
@@ -106,7 +182,7 @@ export function calculateMultiHang(input) {
       spanM,
       extraLineKNm: extra.lineKNm,
       extraPointKN: extra.pointKN,
-      selfWeightKNm: input.beamSelfWeightKNm,
+      selfWeightKNm: totalBeamSelfWeightKNm,
     });
     return {
       layer: index + 1,
@@ -116,7 +192,7 @@ export function calculateMultiHang(input) {
       ...internal,
       extraLineKNm: extra.lineKNm,
       extraPointKN: extra.pointKN,
-      selfWeightKNm: input.beamSelfWeightKNm,
+      selfWeightKNm: totalBeamSelfWeightKNm,
     };
   });
 
@@ -128,6 +204,7 @@ export function calculateMultiHang(input) {
   const rodAreaMm2 = Math.PI * input.rodDiameterMm ** 2 / 4;
   const rodStressNmm2 = 1.5 * loadPerRodKN * 1000 / rodAreaMm2;
   const rodAllowableNmm2 = DEFAULT_STEEL_ALLOWABLE[input.rodSteel] * 0.85;
+  const beamChecks = calculateBeamChecks(layers, spanM, beamSection, input);
 
   return {
     widthMm,
@@ -142,6 +219,9 @@ export function calculateMultiHang(input) {
     rodStressNmm2,
     rodAllowableNmm2,
     rodPass: rodStressNmm2 <= rodAllowableNmm2,
-    beamChecksAvailable: false,
+    sectionSelfWeightKNm,
+    beamSelfWeightIncluded: !beamSection || isPositiveFinite(beamSection.selfWeightKNm),
+    beamChecks,
+    beamChecksAvailable: beamChecks.available,
   };
 }

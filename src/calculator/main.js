@@ -6,10 +6,20 @@ import {
   validateMultiHangInput,
 } from './calculation.js';
 import { PIPE_CATALOG } from './pipeCatalog.js';
+import { parseSteelCatalog, STEEL_TYPES } from './steelCatalog.js';
+import { listenForParameterMessages, postParameterMessage } from '../parameterMessages.js';
 import './styles.css';
 
 const app = document.querySelector('#calculator-app');
-const state = { layerCount: 3, result: null };
+const embedded = window.parent !== window;
+const state = {
+  layerCount: 3,
+  result: null,
+  steelCatalog: null,
+  layerElevationsMm: [2400, 1800, 1200],
+  sharedParameters: null,
+  layerCache: [],
+};
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const pipeGroups = [...new Map(PIPE_CATALOG.pipes.map((pipe) => [
@@ -25,12 +35,14 @@ app.innerHTML = `
     </a>
     <div class="top-actions">
       <span class="standalone-tag"><i></i>独立计算模块</span>
-      <a class="button button-quiet" href="./">返回三维可视化</a>
+      ${embedded
+    ? '<button class="button button-quiet" id="close-calculator">返回三维模型</button>'
+    : '<a class="button button-quiet" href="./">返回三维可视化</a>'}
     </div>
   </header>
   <main class="calc-page">
     <section class="calc-title">
-      <div><span class="eyebrow">LOAD & MEMBER CHECK · TAB 2</span><h1>多层吊架受力计算</h1><p>依据附件 Tab 2「多层吊架」公式提取，独立输入、独立计算，不与三维模型参数联动。</p></div>
+      <div><span class="eyebrow">LOAD & MEMBER CHECK · TAB 2</span><h1>多层吊架受力计算</h1><p>与三维模型实时同步支架宽度、吊杆直径和 2–5 层横梁标高；管道荷载与型钢验算仍为计算器专属参数。</p></div>
       <span class="unit-contract">输入 / 输出：mm · kN</span>
     </section>
     <div class="calc-grid">
@@ -42,20 +54,27 @@ app.innerHTML = `
 
         <div class="section-heading subsection"><span class="section-index">02</span><div><h2>吊架与吊杆参数</h2><p>所有力及线荷载输入均为 kN；所有几何尺寸均为 mm。</p></div></div>
         <div class="parameter-grid">
+          <label class="parameter-field"><span>共享支架宽度 B</span><span class="input-unit"><input type="number" id="beam-width-override" min="200" max="6000" step="50" value="1200"><em>mm</em></span><small>按管道排布计算的净宽较大时，取较大值。</small></label>
           <label class="parameter-field"><span>吊架间距</span><span class="input-unit"><input type="number" id="spacing" min="1" step="100" value="3000"><em>mm</em></span></label>
           <label class="parameter-field"><span>手工最小净宽</span><span class="input-unit"><input type="number" id="min-width" min="0" step="50" value="0"><em>mm</em></span></label>
-          <label class="parameter-field"><span>横梁自重（手工）</span><span class="input-unit"><input type="number" id="beam-self-weight" min="0" step="0.01" value="0"><em>kN/m</em></span><small>缺少型钢库时不自动估算；默认 0 表示本次未计入。</small></label>
+          <label class="parameter-field"><span>附加线荷载（手工）</span><span class="input-unit"><input type="number" id="beam-self-weight" min="0" step="0.01" value="0"><em>kN/m</em></span><small>不含型钢自重；选定有效截面后会自动计入库中自重。</small></label>
           <label class="parameter-field"><span>吊杆圆钢直径</span><span class="input-unit"><select id="rod-diameter"></select><em>mm</em></span></label>
           <label class="parameter-field"><span>吊杆钢号</span><span class="input-unit"><select id="rod-steel"><option value="Q235">Q235</option><option value="Q345">Q345</option></select></span></label>
         </div>
 
-        <div class="section-heading subsection beam-section-heading"><span class="section-index">03</span><div><h2>横梁型钢校核</h2><p>横梁支持 C 槽钢 / H 型钢；强度和挠度校核需要型钢数据文件。</p></div></div>
+        <div class="section-heading subsection beam-section-heading"><span class="section-index">03</span><div><h2>横梁型钢校核</h2><p>仅开放数据完整的 C 槽钢 / H 型钢，按 x 轴抗弯；角钢及其他截面暂不支持。</p></div></div>
         <div class="steel-library-warning" id="steel-library-status" role="status"><span class="warning-symbol">!</span><div><strong>未加载型钢库：横梁强度与挠度校核不可用</strong><p>请将 <code>steel_data.json</code> 放入 <code>public/steel_query_package/</code> 后刷新。不会使用臆造截面属性；吊架宽度、荷载、内力与吊杆验算仍可运行。</p></div></div>
         <div class="parameter-grid beam-input-grid">
-          <label class="parameter-field"><span>横梁类型</span><span class="input-unit"><select id="beam-type" disabled><option>C 槽钢</option><option>H 型钢</option></select></span></label>
-          <label class="parameter-field"><span>型钢型号</span><span class="input-unit"><select id="beam-model" disabled><option>等待型钢库</option></select></span></label>
+          <label class="parameter-field"><span>横梁类型</span><span class="input-unit"><select id="beam-type" disabled><option value="">等待型钢库</option></select></span></label>
+          <label class="parameter-field"><span>型钢型号</span><span class="input-unit"><select id="beam-model" disabled><option value="">等待型钢库</option></select></span></label>
         </div>
-        <div class="engineering-note"><strong>工程边界</strong>本模块是计算过程原型，不是设计批准或规范符合性证明。结果需由专业工程师复核，且不应直接作为施工依据。</div>
+        <div class="parameter-grid beam-material-grid">
+          <label class="parameter-field"><span>弹性模量 E</span><span class="input-unit"><input type="number" id="beam-elastic-modulus" min="0" step="1000" placeholder="必填，无默认值"><em>N/mm²</em></span></label>
+          <label class="parameter-field"><span>受弯容许应力</span><span class="input-unit"><input type="number" id="beam-allowable-stress" min="0" step="1" placeholder="必填，无默认值"><em>N/mm²</em></span></label>
+          <label class="parameter-field"><span>挠度限值</span><span class="input-unit"><input type="number" id="beam-deflection-limit" min="0" step="1" placeholder="必填，无默认值"><em>mm</em></span></label>
+        </div>
+        <div class="sync-status calc-sync-status" id="calc-sync-status" role="status"></div>
+        <div class="engineering-note"><strong>工程边界</strong>数据库不含材料弹性模量、受弯容许应力或挠度限值，必须由使用者依据项目条件填写后才可判定；本页仅检查 x 轴弯曲与简支梁挠度，不含稳定、剪切、局部屈曲、扭转、连接及规范符合性。结果需由专业工程师复核，不可直接作为施工依据。</div>
         <div class="form-error" id="form-error" role="alert" hidden></div>
         <div class="calc-actions"><button class="button button-primary calculate-button" id="calculate">计算受力</button><button class="button button-quiet" id="reset">恢复示例输入</button></div>
       </section>
@@ -65,7 +84,7 @@ app.innerHTML = `
         <div class="result-body" id="result-body">
           <div class="empty-state"><span>∑</span><strong>等待计算</strong><p>计算结果将按层列出管道荷载、横梁内力、吊架宽度和吊杆验算。</p></div>
         </div>
-        <div class="result-footnote"><span class="legend-dot warn"></span>横梁强度 / 挠度校核因型钢库缺失而禁用，不会显示为“满足”。</div>
+        <div class="result-footnote"><span class="legend-dot warn"></span>横梁未判定时会注明缺失的截面、材料参数或限值，不会显示为“满足”。</div>
       </aside>
     </div>
     <footer class="calc-footer"><span>TAB 2 · MULTI-LAYER HANGER</span><span>本页独立运行 · 与可视化模型参数暂不联动</span></footer>
@@ -86,13 +105,20 @@ function defaultPipe(code = 'HV', spec = 'DN100') {
   return pipe;
 }
 
-function makePipeRow(layerIndex, pipeIndex) {
-  const selected = defaultPipe();
-  const values = pipeCatalogEntryToCalculationInput(selected);
+function makePipeRow(layerIndex, pipeIndex, savedPipe) {
+  const fallback = defaultPipe();
+  const selectedCode = savedPipe?.code ?? fallback.code;
+  const selectedSpec = specsForCode(selectedCode).some((pipe) => pipe.spec === savedPipe?.spec)
+    ? savedPipe.spec
+    : fallback.spec;
+  const selected = specsForCode(selectedCode).find((pipe) => pipe.spec === selectedSpec) ?? fallback;
+  const values = savedPipe
+    ? { diameterMm: savedPipe.diameterMm, lineLoadKNm: savedPipe.lineLoadKNm, widthMm: savedPipe.widthMm }
+    : pipeCatalogEntryToCalculationInput(selected);
   const codeOptions = pipeGroups.map((group) =>
-    `<option value="${escapeHtml(group.code)}" ${group.code === selected.code ? 'selected' : ''}>${escapeHtml(group.label)}</option>`).join('');
-  const specOptions = specsForCode(selected.code).map((pipe) =>
-    `<option value="${escapeHtml(pipe.spec)}" ${pipe.spec === selected.spec ? 'selected' : ''}>${escapeHtml(pipe.spec)}</option>`).join('');
+    `<option value="${escapeHtml(group.code)}" ${group.code === selectedCode ? 'selected' : ''}>${escapeHtml(group.label)}</option>`).join('');
+  const specOptions = specsForCode(selectedCode).map((pipe) =>
+    `<option value="${escapeHtml(pipe.spec)}" ${pipe.spec === selectedSpec ? 'selected' : ''}>${escapeHtml(pipe.spec)}</option>`).join('');
   return `<div class="pipe-row" data-pipe-row>
     <span class="pipe-row-number">${pipeIndex + 1}</span>
     <label><span>管道类型</span><span class="input-unit"><select data-pipe="code" aria-label="第${layerIndex}层第${pipeIndex + 1}根管道类型">${codeOptions}</select></span></label>
@@ -104,41 +130,156 @@ function makePipeRow(layerIndex, pipeIndex) {
   </div>`;
 }
 
-function renderLayers() {
+function renderLayers({ capture = true } = {}) {
+  if (capture && $$('.layer-card').length) {
+    const visibleLayers = $$('.layer-card').map((card) => ({
+      elevationMm: Number($('[data-support-elevation]', card).value),
+      pipes: $$('.pipe-row', card).map((row) => ({
+        code: $('[data-pipe="code"]', row).value,
+        spec: $('[data-pipe="spec"]', row).value,
+        diameterMm: Number($('[data-pipe="diameterMm"]', row).value),
+        lineLoadKNm: Number($('[data-pipe="lineLoadKNm"]', row).value),
+        widthMm: Number($('[data-pipe="widthMm"]', row).value),
+      })),
+      extra: {
+        lineKNm: Number($('[data-extra-line]', card).value),
+        pointKN: Number($('[data-extra-point]', card).value),
+      },
+    }));
+    state.layerCache = [...visibleLayers, ...state.layerCache.slice(visibleLayers.length)];
+  }
   $('#layer-count').textContent = `${state.layerCount} 层`;
   $('#layer-minus').disabled = state.layerCount <= 2;
   $('#layer-plus').disabled = state.layerCount >= 5;
-  $('#pipe-layers').innerHTML = Array.from({ length: state.layerCount }, (_, index) => `
+  $('#pipe-layers').innerHTML = Array.from({ length: state.layerCount }, (_, index) => {
+    const cached = state.layerCache[index];
+    const pipes = cached?.pipes?.length ? cached.pipes : [null];
+    const elevation = state.layerElevationsMm[index] ?? cached?.elevationMm ?? (1800 - index * 600);
+    return `
     <section class="layer-card" data-layer="${index + 1}">
-      <div class="layer-heading"><span class="layer-badge">${String(index + 1).padStart(2, '0')}</span><div><h3>第 ${index + 1} 层管道</h3><small>管道作用于本层横梁及总吊杆</small></div><button type="button" class="add-pipe" data-add-pipe>＋ 管道</button></div>
-      <div class="pipe-rows">${makePipeRow(index + 1, 0)}</div>
-      <div class="layer-extra"><label>本层附加线荷载 <span class="input-unit"><input type="number" min="0" step="0.1" value="0" data-extra-line><em>kN/m</em></span></label><label>本层附加集中力 <span class="input-unit"><input type="number" min="0" step="0.1" value="0" data-extra-point><em>kN</em></span></label></div>
-    </section>`).join('');
+      <div class="layer-heading"><span class="layer-badge">${String(index + 1).padStart(2, '0')}</span><div><h3>第 ${index + 1} 层管道</h3><small>管道作用于本层横梁及总吊杆</small></div><label class="support-level-field">标高 <span class="input-unit"><input type="number" min="200" max="10000" step="50" value="${escapeHtml(elevation)}" data-support-elevation><em>mm</em></span></label><button type="button" class="add-pipe" data-add-pipe>＋ 管道</button></div>
+      <div class="pipe-rows">${pipes.map((pipe, pipeIndex) => makePipeRow(index + 1, pipeIndex, pipe)).join('')}</div>
+      <div class="layer-extra"><label>本层附加线荷载 <span class="input-unit"><input type="number" min="0" step="0.1" value="${escapeHtml(cached?.extra?.lineKNm ?? 0)}" data-extra-line><em>kN/m</em></span></label><label>本层附加集中力 <span class="input-unit"><input type="number" min="0" step="0.1" value="${escapeHtml(cached?.extra?.pointKN ?? 0)}" data-extra-point><em>kN</em></span></label></div>
+    </section>`;
+  }).join('');
+  state.layerCache = $$('.layer-card').map((card) => ({
+    elevationMm: Number($('[data-support-elevation]', card).value),
+    pipes: $$('.pipe-row', card).map((row) => ({
+      code: $('[data-pipe="code"]', row).value,
+      spec: $('[data-pipe="spec"]', row).value,
+      diameterMm: Number($('[data-pipe="diameterMm"]', row).value),
+      lineLoadKNm: Number($('[data-pipe="lineLoadKNm"]', row).value),
+      widthMm: Number($('[data-pipe="widthMm"]', row).value),
+    })),
+    extra: {
+      lineKNm: Number($('[data-extra-line]', card).value),
+      pointKN: Number($('[data-extra-point]', card).value),
+    },
+  })).concat(state.layerCache.slice(state.layerCount));
   state.result = null;
   $('#result-body').innerHTML = '<div class="empty-state"><span>∑</span><strong>等待计算</strong><p>计算结果将按层列出管道荷载、横梁内力、吊架宽度和吊杆验算。</p></div>';
   $('#result-state').textContent = '填入各层管道荷载后开始计算。';
 }
 
 function readInput() {
+  const beamSection = state.steelCatalog?.sections.find((section) =>
+    section.type === $('#beam-type').value && section.model === $('#beam-model').value) ?? null;
   const layers = $$('.layer-card').map((card) => ({
     pipes: $$('.pipe-row', card).map((row) => ({
+      code: $('[data-pipe="code"]', row).value,
+      spec: $('[data-pipe="spec"]', row).value,
       diameterMm: Number($('[data-pipe="diameterMm"]', row).value),
       lineLoadKNm: Number($('[data-pipe="lineLoadKNm"]', row).value),
       widthMm: Number($('[data-pipe="widthMm"]', row).value),
     })),
   }));
   return {
+    beamWidthOverrideMm: Number($('#beam-width-override').value),
     spacingMm: Number($('#spacing').value),
     minWidthMm: Number($('#min-width').value),
     beamSelfWeightKNm: Number($('#beam-self-weight').value),
     rodDiameterMm: Number($('#rod-diameter').value),
     rodSteel: $('#rod-steel').value,
+    beamSection,
+    beamElasticModulusNmm2: Number($('#beam-elastic-modulus').value),
+    beamAllowableBendingStressNmm2: Number($('#beam-allowable-stress').value),
+    beamDeflectionLimitMm: Number($('#beam-deflection-limit').value),
     layers,
     extraLoads: $$('.layer-card').map((card) => ({
       lineKNm: Number($('[data-extra-line]', card).value),
       pointKN: Number($('[data-extra-point]', card).value),
     })),
+    layerElevationsMm: $$('.layer-card').map((card) => Number($('[data-support-elevation]', card).value)),
   };
+}
+
+function sendCalculatorParameters(parameters = readInput()) {
+  if (!embedded) return;
+  if (Array.isArray(parameters.layerElevationsMm)) {
+    state.layerElevationsMm = [...parameters.layerElevationsMm];
+    const retained = state.layerCache.slice(parameters.layers.length);
+    state.layerCache = parameters.layers.map((layer, index) => ({
+      ...layer,
+      elevationMm: parameters.layerElevationsMm[index],
+      extra: parameters.extraLoads[index],
+    })).concat(retained);
+  }
+  const calculator = {
+    ...parameters,
+    calculatedWidthMm: parameters.calculatedWidthMm ?? null,
+    overflowLayers: state.sharedParameters?.calculator.overflowLayers ?? [],
+    overflowExtraLoads: state.sharedParameters?.calculator.overflowExtraLoads ?? [],
+    overflowLayerElevationsMm: state.sharedParameters?.calculator.overflowLayerElevationsMm ?? [],
+  };
+  postParameterMessage(window.parent, location.origin, 'calculator-parameters', calculator);
+}
+
+function applyVisualizerParameters(shared) {
+  if (!shared || shared.schemaVersion !== 1 || !shared.calculator) return;
+  state.sharedParameters = shared;
+  const calculator = shared.calculator;
+  if (Number.isFinite(calculator.beamWidthOverrideMm)) {
+    $('#beam-width-override').value = calculator.beamWidthOverrideMm;
+  }
+  if (Number.isFinite(calculator.rodDiameterMm)) {
+    const rodSelect = $('#rod-diameter');
+    let option = [...rodSelect.options].find((item) => Number(item.value) === calculator.rodDiameterMm);
+    if (!option) {
+      option = document.createElement('option');
+      option.value = String(calculator.rodDiameterMm);
+      option.textContent = `φ${calculator.rodDiameterMm} · 可视化同步`;
+      rodSelect.append(option);
+    }
+    rodSelect.value = String(calculator.rodDiameterMm);
+  }
+
+  const elevations = calculator.layerElevationsMm;
+  if (Array.isArray(elevations) && elevations.length >= 2 && elevations.length <= 5) {
+    const activeCountChanged = state.layerCount !== elevations.length;
+    state.layerCount = elevations.length;
+    state.layerElevationsMm = [...elevations];
+    const cachedLayers = [...(calculator.layers ?? []), ...(calculator.overflowLayers ?? [])];
+    const cachedExtras = [...(calculator.extraLoads ?? []), ...(calculator.overflowExtraLoads ?? [])];
+    state.layerCache = elevations.map((elevationMm, index) => ({
+      ...state.layerCache[index],
+      ...cachedLayers[index],
+      elevationMm,
+      extra: cachedExtras[index] ?? state.layerCache[index]?.extra ?? { lineKNm: 0, pointKN: 0 },
+    }));
+    if (activeCountChanged) renderLayers({ capture: false });
+    else {
+      $$('.layer-card').forEach((card, index) => {
+        $('[data-support-elevation]', card).value = elevationMmString(elevations[index]);
+      });
+    }
+  }
+  const status = $('#calc-sync-status');
+  status.textContent = shared.notices.join(' ');
+  status.hidden = !shared.notices.length;
+}
+
+function elevationMmString(value) {
+  return String(value);
 }
 
 function format(value, digits = 2) {
@@ -159,9 +300,24 @@ function renderResults(result, input) {
       <div class="result-row"><span>剪力 Vmax（包络 × 1.3）</span><strong>${format(layer.shearKN, 3)} <small>kN</small></strong></div>
     </section>`).join('');
   const beamSelfWeightText = input.beamSelfWeightKNm === 0
-    ? '横梁自重按输入 0 计，本次未包含型钢自重。'
-    : `横梁自重按手工输入 ${format(input.beamSelfWeightKNm, 3)} kN/m 计入。`;
-  $('#result-state').textContent = '计算已完成；横梁截面强度和挠度因缺少型钢库仍不可用。';
+    ? `附加线荷载按 0 kN/m 计${result.beamSelfWeightIncluded && input.beamSection ? `；型钢自重 ${format(result.sectionSelfWeightKNm, 4)} kN/m 已自动计入` : ''}。`
+    : `附加线荷载 ${format(input.beamSelfWeightKNm, 3)} kN/m 已计入${result.beamSelfWeightIncluded && input.beamSection ? `；型钢自重 ${format(result.sectionSelfWeightKNm, 4)} kN/m 自动计入` : ''}。`;
+  $('#result-state').textContent = result.beamChecksAvailable
+    ? '计算已完成；横梁弯曲强度与挠度均已按显式输入限值判定。'
+    : '计算已完成；横梁校核结果可能因缺少截面或材料 / 限值输入而不可判定。';
+  const beamResults = input.beamSection ? result.beamChecks.layers.map((check) => `
+    <div class="result-row"><span>第 ${check.layer} 层弯曲应力需求 M/W</span><strong>${format(check.bendingStressNmm2, 2)} <small>N/mm²</small></strong></div>
+    <div class="result-row"><span>受弯限值 ${check.allowableBendingStressNmm2 === null ? '未提供' : `${format(check.allowableBendingStressNmm2, 2)} N/mm²`}</span><strong class="check-pill ${check.strengthPass === true ? 'pass' : check.strengthPass === false ? 'fail' : 'warn'}">${check.strengthPass === null ? '不可判定' : check.strengthPass ? '满足' : '不满足'}</strong></div>
+    <div class="result-row"><span>第 ${check.layer} 层挠度需求（包络 × 1.3）</span><strong>${check.deflectionMm === null ? '—' : `${format(check.deflectionMm, 3)} <small>mm</small>`}</strong></div>
+    <div class="result-row"><span>挠度限值 ${check.deflectionLimitMm === null ? '未提供' : `${format(check.deflectionLimitMm, 3)} mm`}</span><strong class="check-pill ${check.deflectionPass === true ? 'pass' : check.deflectionPass === false ? 'fail' : 'warn'}">${check.deflectionPass === null ? '不可判定' : check.deflectionPass ? '满足' : '不满足'}</strong></div>`).join('') : '';
+  const beamSectionResult = input.beamSection ? `
+    <section class="result-layer beam-result">
+      <div class="result-layer-heading"><span>横梁截面校核 · ${escapeHtml(input.beamSection.typeLabel)} ${escapeHtml(input.beamSection.model)}</span><span class="check-pill ${result.beamChecksAvailable ? 'pass' : 'warn'}">${result.beamChecksAvailable ? '已判定' : '部分不可判定'}</span></div>
+      <div class="result-row"><span>Ix / Wx</span><strong>${format(input.beamSection.IxCm4, 2)} / ${format(input.beamSection.WxCm3, 2)} <small>cm⁴ / cm³</small></strong></div>
+      <div class="result-row"><span>型钢自重（自动计入）</span><strong>${format(result.sectionSelfWeightKNm, 4)} <small>kN/m</small></strong></div>
+      ${beamResults}
+      ${result.beamChecks.reason ? `<p class="beam-check-note">${escapeHtml(result.beamChecks.reason)}</p>` : ''}
+    </section>` : `<section class="result-layer beam-result"><div class="result-layer-heading"><span>横梁截面校核</span><span class="check-pill warn">未执行</span></div><p class="beam-check-note">${escapeHtml(result.beamChecks.reason)}</p></section>`;
   $('#result-body').innerHTML = `
     <section class="result-width"><span>计算吊架宽度 B</span><strong>${format(result.widthMm, 0)} <small>mm</small></strong><p>${widthComponents}${input.minWidthMm > 0 ? ` · 手工最小 ${format(input.minWidthMm, 0)} mm` : ''}</p></section>
     ${layers}
@@ -174,7 +330,8 @@ function renderResults(result, input) {
       <div class="result-row"><span>拉应力 σ = 1.5N/A</span><strong>${format(result.rodStressNmm2, 1)} <small>N/mm²</small></strong></div>
       <div class="result-row"><span>限值 0.85f (${escapeHtml(input.rodSteel)})</span><strong>${format(result.rodAllowableNmm2, 1)} <small>N/mm²</small></strong></div>
     </section>
-    <div class="result-warning"><span class="warning-symbol">!</span><p>${escapeHtml(beamSelfWeightText)}横梁强度 / 挠度校核未执行；请补齐型钢库后再评估横梁。</p></div>`;
+    ${beamSectionResult}
+    <div class="result-warning"><span class="warning-symbol">!</span><p>${escapeHtml(beamSelfWeightText)}应力 / 挠度需求基于简支梁与数据表 x 轴截面属性；缺少的材料参数或限值不会被自动补默认值。</p></div>`;
 }
 
 function runCalculation() {
@@ -185,7 +342,13 @@ function runCalculation() {
   error.innerHTML = validation.valid ? '' : `<strong>输入有误</strong><ul>${validation.errors.map((message) => `<li>${escapeHtml(message)}</li>`).join('')}</ul>`;
   if (!validation.valid) return;
   state.result = calculateMultiHang(input);
+  input.calculatedWidthMm = state.result.widthMm;
+  if (state.result.widthMm <= 6000) {
+    input.beamWidthOverrideMm = state.result.widthMm;
+    $('#beam-width-override').value = String(state.result.widthMm);
+  }
   renderResults(state.result, input);
+  sendCalculatorParameters(input);
 }
 
 function resetInputs() {
@@ -195,20 +358,37 @@ function resetInputs() {
   $('#beam-self-weight').value = 0;
   $('#rod-diameter').value = 16;
   $('#rod-steel').value = 'Q235';
+  $('#beam-elastic-modulus').value = '';
+  $('#beam-allowable-stress').value = '';
+  $('#beam-deflection-limit').value = '';
+  state.layerElevationsMm = [2400, 1800, 1200];
+  state.layerCache = [];
   $('#form-error').hidden = true;
   renderLayers();
+  sendCalculatorParameters();
+}
+
+function updateBeamModels() {
+  const type = $('#beam-type').value;
+  const sections = state.steelCatalog.sections.filter((section) => section.type === type);
+  $('#beam-model').innerHTML = sections.map((section) =>
+    `<option value="${escapeHtml(section.model)}">${escapeHtml(section.model)}</option>`).join('');
+  $('#beam-model').disabled = sections.length === 0;
 }
 
 $('#rod-diameter').innerHTML = ROD_DIAMETERS_MM.map((diameter) => `<option value="${diameter}" ${diameter === 16 ? 'selected' : ''}>φ${diameter}</option>`).join('');
 $('#layer-minus').addEventListener('click', () => {
   if (state.layerCount > 2) {
     state.layerCount -= 1;
+    state.layerElevationsMm = state.layerElevationsMm.slice(0, state.layerCount);
     renderLayers();
   }
 });
 $('#layer-plus').addEventListener('click', () => {
   if (state.layerCount < 5) {
+    const lowest = Math.min(...state.layerElevationsMm);
     state.layerCount += 1;
+    state.layerElevationsMm.push(Math.max(200, lowest - 600));
     renderLayers();
   }
 });
@@ -245,8 +425,35 @@ $('#pipe-layers').addEventListener('change', (event) => {
     $('[data-pipe="widthMm"]', row).value = values.widthMm;
   }
 });
+$('#beam-type').addEventListener('change', updateBeamModels);
 $('#calculate').addEventListener('click', runCalculation);
 $('#reset').addEventListener('click', resetInputs);
+app.addEventListener('input', (event) => {
+  if (!event.target.closest('.calc-input')) return;
+  sendCalculatorParameters();
+});
+app.addEventListener('change', (event) => {
+  if (!event.target.closest('.calc-input')) return;
+  sendCalculatorParameters();
+});
+app.addEventListener('click', (event) => {
+  if (event.target.closest('#layer-minus, #layer-plus, [data-add-pipe], [data-remove-pipe], #reset')) {
+    sendCalculatorParameters();
+  }
+});
+
+if (embedded) {
+  $('#close-calculator').addEventListener('click', () => {
+    postParameterMessage(window.parent, location.origin, 'calculator-close');
+  });
+  listenForParameterMessages(window, {
+    expectedOrigin: location.origin,
+    expectedSource: window.parent,
+    handlers: {
+      'visual-parameters': (message) => applyVisualizerParameters(message.parameters),
+    },
+  });
+}
 
 renderLayers();
 
@@ -259,12 +466,23 @@ fetch(`${import.meta.env.BASE_URL}steel_query_package/steel_data.json`)
     return response.json();
   })
   .then((data) => {
-    if (!Array.isArray(data.data)) throw new Error('型钢库数据格式无效');
+    state.steelCatalog = parseSteelCatalog(data);
+    const availableTypes = Object.keys(STEEL_TYPES).filter((type) =>
+      state.steelCatalog.sections.some((section) => section.type === type));
+    $('#beam-type').innerHTML = availableTypes.map((type) =>
+      `<option value="${type}">${STEEL_TYPES[type]}</option>`).join('');
+    $('#beam-type').disabled = false;
+    updateBeamModels();
     $('#steel-library-status').classList.add('loaded');
-    $('#steel-library-status').innerHTML = `<span class="warning-symbol">✓</span><div><strong>型钢库已加载；完整截面验算仍待模块接入</strong><p>库数据已识别，但当前版本仅展示 Tab2 的宽度、荷载、内力和吊杆结果；不会将未实现的横梁校核伪装为完成。</p></div>`;
+    const incompleteText = state.steelCatalog.unavailable.length
+      ? ` ${state.steelCatalog.unavailable.length} 条 C/H 记录因缺少 Ix、Wx 或 weight 被排除。`
+      : '';
+    $('#steel-library-status').innerHTML = `<span class="warning-symbol">✓</span><div><strong>型钢库已加载：${state.steelCatalog.sections.length} 个可用 C/H 截面</strong><p>仅使用有正值 Ix、Wx 和 weight 的槽钢 / H 型钢；角钢、钢管等类别不用于横梁校核。${incompleteText}材料参数和限值必须手工填写。</p></div>`;
+    if (state.sharedParameters) applyVisualizerParameters(state.sharedParameters);
   })
   .catch((error) => {
     $('#steel-library-status').dataset.reason = error.message;
+    $('#steel-library-status').querySelector('strong').textContent = '型钢库不可用：横梁强度与挠度校核已禁用';
     $('.steel-library-warning p', $('#steel-library-status')).textContent =
-      `型钢库读取失败（${error.message}）。请将真实 steel_data.json 放入 public/steel_query_package/ 后刷新；不会估算或伪造截面属性。宽度、荷载、内力与吊杆验算仍可运行。`;
+      `型钢库读取失败（${error.message}）。请选择有效 JSON 文件并刷新；不会估算或伪造截面属性。宽度、荷载、内力与吊杆验算仍可运行。`;
   });

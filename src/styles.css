@@ -37,6 +37,12 @@ h1,h2,h3,p { margin: 0; }
 .icon-button { border: 1px solid var(--line); background: #fff; color: #7c8994; width: 31px; height: 31px; border-radius: 7px; font-size: 20px; line-height: 1; }
 .icon-button:hover { color: var(--teal); border-color: #a9ceca; }
 .panel-intro { margin: 9px 0 20px; color: #7d8994; font-size: 11px; line-height: 1.65; }
+.sync-status { margin: -10px 0 12px; color: #9a742e; font-size: 9px; line-height: 1.5; }
+.sync-status:empty { display: none; }
+.calculator-drawer { position: fixed; z-index: 20; inset: 4vh 3vw; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dce4e8; border-radius: 12px; background: #f3f5f7; box-shadow: 0 18px 70px #17243355; }
+.calculator-drawer[hidden] { display: none; }
+.calculator-drawer-heading { height: 43px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; color: #40515e; font-size: 11px; }
+.calculator-drawer iframe { width: 100%; flex: 1; border: 0; background: #f3f5f7; }
 .form-section { padding: 17px 0 16px; border-top: 1px solid #edf0f2; }
 .section-title { height: 21px; display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .section-index { color: #35918b; font: 10px 'DM Mono', monospace; }
@@ -128,6 +134,7 @@ input:disabled { color: #8e9aa2 !important; }
   .demo-tag { display: none; }
   .top-actions { gap: 6px; }
   .button { padding: 0 9px; font-size: 10px; }
+  .calculator-drawer { inset: 2vh 2vw; }
   .workspace { grid-template-columns: 1fr; padding: 12px; gap: 13px; }
   .settings-panel { max-height: none; grid-row: 2; }
   .main-content { grid-row: 1; }

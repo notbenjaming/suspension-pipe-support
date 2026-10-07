@@ -52,6 +52,9 @@ button, select { cursor: pointer; }
 .layer-badge { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 6px; background: #edf5f4; color: #41847e; font: 9px Consolas,monospace; }
 .layer-heading h3 { margin: 0; font-size: 11px; }
 .layer-heading small { display: block; margin-top: 3px; color: #a0aab1; font-size: 8px; }
+.support-level-field { display: flex; align-items: center; gap: 5px; margin-left: auto; color: #7b8993; font-size: 8px; white-space: nowrap; }
+.support-level-field .input-unit { min-height: 26px; width: 95px; padding: 0 5px; }
+.support-level-field .input-unit input { font-size: 9px; }
 .add-pipe { margin-left: auto; border: 0; border-radius: 5px; background: transparent; color: #39857f; padding: 5px 7px; font-size: 9px; }
 .add-pipe:hover { background: #f0f7f6; }
 .pipe-rows { display: flex; flex-direction: column; gap: 5px; }
@@ -86,7 +89,11 @@ button, select { cursor: pointer; }
 .steel-library-warning.loaded .warning-symbol { background: #d5eee5; color: #21775b; }
 .steel-library-warning.loaded strong { color: #286f59; }
 .steel-library-warning.loaded p { color: #6c9183; }
-.beam-input-grid { margin-top: 10px; opacity: .58; }
+.beam-input-grid { margin-top: 10px; }
+.beam-material-grid { margin-top: 9px; }
+.calc-sync-status { margin: 10px 0 0 31px; padding: 8px 10px; border-radius: 6px; background: #fff8e9; color: #8f702f; font-size: 8px; line-height: 1.5; }
+.calc-sync-status:empty { display: none; }
+.beam-material-grid .parameter-field small { min-height: 20px; }
 .engineering-note { margin: 14px 0 0 31px; padding: 9px 11px; border-left: 2px solid #d5dee3; background: #fafbfc; color: #84919b; font-size: 8px; line-height: 1.6; }
 .engineering-note strong { color: #667682; margin-right: 5px; }
 .form-error { margin: 12px 0 0 31px; padding: 9px 11px; border: 1px solid #f0d2c6; border-radius: 6px; background: #fff8f4; color: #a54f39; font-size: 9px; line-height: 1.55; }
@@ -116,6 +123,9 @@ button, select { cursor: pointer; }
 .check-pill { border-radius: 99px; padding: 4px 7px; font-size: 8px; }
 .check-pill.pass { background: #eaf6f0; color: #33835d; }
 .check-pill.fail { background: #fff0ed; color: #ba5147; }
+.check-pill.warn { background: #fff7e8; color: #9a742e; }
+.beam-result { border-color: #dbe5e8; background: #fbfcfc; }
+.beam-check-note { margin-top: 8px; color: #9a742e; font-size: 8px; line-height: 1.55; }
 .result-warning { display: flex; gap: 8px; margin-top: 10px; padding: 9px; border-radius: 6px; background: #fff9f0; }
 .result-warning .warning-symbol { width: 15px; height: 15px; font-size: 9px; }
 .result-warning p { color: #8f7a57; font-size: 8px; line-height: 1.55; }
@@ -135,6 +145,7 @@ button, select { cursor: pointer; }
   .unit-contract { white-space: nowrap; padding: 6px 8px; font-size: 8px; }
   .calc-input { padding: 14px 11px; }
   .layer-card { overflow-x: auto; }
+  .layer-heading { min-width: 640px; }
   .pipe-row { min-width: 640px; grid-template-columns: 16px minmax(120px,1.35fr) minmax(75px,.8fr) minmax(68px,.65fr) minmax(90px,1fr) minmax(80px,.85fr) 20px; gap: 5px; }
   .pipe-row label > span:first-child { font-size: 8px; }
   .input-unit { padding: 0 4px; }

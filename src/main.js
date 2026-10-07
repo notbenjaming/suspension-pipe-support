@@ -8,6 +8,12 @@ import {
   HANGER_PRESETS,
   validateConfig,
 } from './model.js';
+import {
+  createSharedParameters,
+  updateSharedFromCalculator,
+  updateSharedFromVisualizer,
+} from './sharedParameters.js';
+import { listenForParameterMessages, postParameterMessage } from './parameterMessages.js';
 import './styles.css';
 
 const app = document.querySelector('#app');
@@ -19,6 +25,8 @@ let controls;
 let supportGroup;
 let resizeObserver;
 let cameraFramed = false;
+let calculatorFrameLoaded = false;
+let sharedParameters;
 
 app.innerHTML = `
   <header class="topbar">
@@ -26,6 +34,7 @@ app.innerHTML = `
     <div class="top-actions">
       <span class="demo-tag"><i></i>示例参数</span>
       <button class="button button-quiet" id="import-button">导入 JSON</button>
+      <button class="button button-quiet" id="calculator-toggle">多层吊架计算</button>
       <button class="button button-primary" id="export-button">导出配置</button>
       <input id="file-input" type="file" accept=".json,application/json" hidden />
     </div>
@@ -37,6 +46,7 @@ app.innerHTML = `
         <button class="icon-button" id="reset-button" title="恢复示例参数" aria-label="恢复示例参数">↺</button>
       </div>
       <p class="panel-intro">调整尺寸与层级，模型和工程示意图将同步更新。</p>
+      <p class="sync-status" id="sync-status" aria-live="polite"></p>
 
       <section class="form-section">
         <div class="section-title"><span class="section-index">01</span><h2>总体尺寸</h2></div>
@@ -103,6 +113,10 @@ app.innerHTML = `
       <footer class="footer-note"><span>PARAMETRIC SUPPORT STUDY</span><span>仅供方案沟通参考 · 请由专业工程师复核</span></footer>
     </section>
   </main>
+  <section class="calculator-drawer" id="calculator-drawer" hidden aria-label="多层吊架计算器">
+    <div class="calculator-drawer-heading"><strong>多层吊架计算 · 几何参数实时联动</strong><button class="button button-quiet small-button" id="calculator-close">关闭</button></div>
+    <iframe id="calculator-frame" title="多层吊架受力计算器" src="./calculator.html"></iframe>
+  </section>
 `;
 
 const $ = (selector) => document.querySelector(selector);
@@ -117,6 +131,22 @@ const input = {
   guideCount: $('#guide-count'),
   guideSpacing: $('#guide-spacing'),
 };
+sharedParameters = createSharedParameters(config);
+
+function sendSharedParametersToCalculator() {
+  sharedParameters = updateSharedFromVisualizer(sharedParameters, config);
+  const frame = $('#calculator-frame');
+  if (!calculatorFrameLoaded || !frame.contentWindow) return;
+  postParameterMessage(frame.contentWindow, location.origin, 'visual-parameters', sharedParameters);
+  renderSyncStatus();
+}
+
+function renderSyncStatus() {
+  const status = $('#sync-status');
+  if (!status) return;
+  status.textContent = sharedParameters.notices.join(' ');
+  status.hidden = sharedParameters.notices.length === 0;
+}
 
 BEAM_PRESETS.forEach((preset) => {
   const option = document.createElement('option');
@@ -167,7 +197,7 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
 
-function applyForm() {
+function applyForm({ source = 'visualizer' } = {}) {
   const candidate = readForm();
   const { valid, errors } = validateConfig(candidate);
   const validation = $('#validation');
@@ -176,6 +206,7 @@ function applyForm() {
   if (valid) {
     config = candidate;
     drawAll();
+    if (source === 'visualizer') sendSharedParametersToCalculator();
   }
   $('#level-count').textContent = `${candidate.levels.length} 层`;
   $('#hanger-chips').querySelectorAll('.preset-chip').forEach((chip) => chip.classList.toggle('active', Number(chip.dataset.diameter) === candidate.hanger.diameter));
@@ -473,6 +504,37 @@ $('#export-button').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 $('#import-button').addEventListener('click', () => $('#file-input').click());
+$('#calculator-toggle').addEventListener('click', () => {
+  $('#calculator-drawer').hidden = false;
+  sendSharedParametersToCalculator();
+});
+$('#calculator-close').addEventListener('click', () => {
+  $('#calculator-drawer').hidden = true;
+});
+$('#calculator-frame').addEventListener('load', () => {
+  calculatorFrameLoaded = true;
+  sendSharedParametersToCalculator();
+});
+listenForParameterMessages(window, {
+  expectedOrigin: location.origin,
+  expectedSource: $('#calculator-frame').contentWindow,
+  handlers: {
+    'calculator-close': () => {
+    $('#calculator-drawer').hidden = true;
+    },
+    'calculator-parameters': (message) => {
+      if (!message.parameters) return;
+      const previousVisual = JSON.stringify(config);
+      sharedParameters = updateSharedFromCalculator(sharedParameters, message.parameters);
+      config = cloneConfig(sharedParameters.visual);
+      if (JSON.stringify(config) !== previousVisual) {
+        syncForm(config);
+        applyForm({ source: 'calculator' });
+      }
+      renderSyncStatus();
+    },
+  },
+});
 $('#file-input').addEventListener('change', async (event) => {
   const [file] = event.target.files;
   if (!file) return;
@@ -492,5 +554,6 @@ $('#file-input').addEventListener('change', async (event) => {
 });
 
 syncForm(config);
+renderSyncStatus();
 initScene();
 drawAll();
